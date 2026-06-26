@@ -15,22 +15,26 @@ and (optionally) installs the radio's USB driver.
 
 ## Download the installer
 
-Grab the latest `TicketsCAD-MeshBridge-Setup.exe` from the
-[**Releases**](../../releases) page. That is the file end users run — they do
-not need this source tree.
+Grab the latest `TicketsCAD-MeshBridge-Setup-v<version>.exe` from the
+[**Releases**](../../releases) page. The filename includes the version so you
+can keep multiple versions side by side. That is the file end users run — they
+do not need this source tree.
 
-> Releases are currently **private** (visible only to people with access to this
-> repository). For broad responder self-service distribution, this repo or its
-> Releases could be made public so users can download the installer without a
-> GitHub login. That is a deliberate decision left to the maintainer.
+> **Windows SmartScreen:** the installer is not code-signed, so on first run
+> Windows may show *"Windows protected your PC"*. Click **More info → Run
+> anyway** to proceed. The installer is built in public CI from this repository
+> (see the **Actions** tab), so you can verify exactly how it was produced.
 
 ## Install flow (what the end user does)
 
-1. Double-click `TicketsCAD-MeshBridge-Setup.exe`.
+1. Double-click the `TicketsCAD-MeshBridge-Setup-v<version>.exe` you downloaded.
+   If Windows shows *"Windows protected your PC"*, click **More info → Run anyway**.
 2. Approve the Windows UAC prompt (installing a service needs administrator
    rights — this is expected).
-3. On the **USB driver** page, leave the CP210x driver box checked unless the
-   driver is already installed.
+3. On the **USB driver** page, the CP210x driver box is **unchecked by default**.
+   Only tick it if the radio shows **no COM port** in Device Manager — the
+   official Silicon Labs driver can replace a working one and may not support
+   clone CP2102 chips found in some low-cost boards.
 4. On the **Bridge Configuration** page, enter:
    - **Server URL** — e.g. `https://your-ticketscad-server.example`
    - **Bearer Token** — issued from the TicketsCAD admin UI

@@ -44,7 +44,7 @@ DisableDirPage=no
 ; Service install requires admin -- request elevation (the UAC prompt is normal).
 PrivilegesRequired=admin
 OutputDir=output
-OutputBaseFilename=TicketsCAD-MeshBridge-Setup
+OutputBaseFilename=TicketsCAD-MeshBridge-Setup-v{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
