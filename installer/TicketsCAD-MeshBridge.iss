@@ -59,7 +59,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopverify"; Description: "Create a desktop shortcut for ""Verify Bridge"""; GroupDescription: "Shortcuts:"
-Name: "installdriver"; Description: "Install the Silicon Labs CP210x USB driver (needed for the radio's COM port)"; GroupDescription: "USB driver:"
+Name: "installdriver"; Description: "Install the Silicon Labs CP210x USB driver - ONLY if the radio shows no COM port. Leave unchecked if your device already works: the official driver may not support clone CP2102 chips used in some low-cost boards."; GroupDescription: "USB driver:"; Flags: unchecked
 
 [Files]
 ; --- The self-contained Python interpreter (deps pre-installed, no venv) ---
