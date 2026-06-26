@@ -25,6 +25,7 @@ Usage:
 import base64
 import argparse
 import asyncio
+import importlib.metadata
 import json
 import logging
 import signal
@@ -34,6 +35,68 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 logger = logging.getLogger("bridge_v2")
+
+
+def _meshtastic_lib_version():
+    """Best-effort version string of the bundled meshtastic-python library.
+
+    Logged once at startup and referenced in the handshake-failure hint so a
+    beta tester (and the troubleshooting doc) can compare it against the
+    board's firmware version when a connect fails.
+    """
+    try:
+        return importlib.metadata.version('meshtastic')
+    except Exception:
+        try:
+            import meshtastic
+            return getattr(meshtastic, '__version__', 'unknown')
+        except Exception:
+            return 'unknown'
+
+
+def classify_meshtastic_connect_error(port, exc):
+    """Turn a raw meshtastic connect exception into an ACTIONABLE log line.
+
+    Returns a single human-readable string. The classification leans on both
+    the exception type AND its message text because the meshtastic library and
+    pyserial surface the same underlying OS condition through several different
+    exception classes depending on platform and code path.
+    """
+    msg = str(exc) or exc.__class__.__name__
+    low = msg.lower()
+    lib = _meshtastic_lib_version()
+
+    # Port held by another program (Meshtastic app, web client/flasher, a
+    # serial monitor, etc.). On Windows this is usually a PermissionError /
+    # "Access is denied"; pyserial also phrases it "could not open port ... in use".
+    if (isinstance(exc, PermissionError)
+            or 'access is denied' in low
+            or 'permission' in low
+            or 'in use' in low
+            or 'busy' in low
+            or 'cannot configure port' in low):
+        return ("[meshtastic %s] port is in use or access denied — close any "
+                "other app using it (the Meshtastic app, client.meshtastic.org, "
+                "the web flasher, an Arduino/PuTTY serial monitor). Only one "
+                "program can hold a serial port at a time." % port)
+
+    # Port does not exist (wrong COM number, radio unplugged, driver changed).
+    if (isinstance(exc, FileNotFoundError)
+            or 'could not open port' in low
+            or 'no such' in low
+            or 'filenotfounderror' in low
+            or 'does not exist' in low):
+        return ("[meshtastic %s] port not found — check the COM number in "
+                "Device Manager -> Ports; it may differ from what's configured."
+                % port)
+
+    # Port opened but the radio never completed the Meshtastic handshake:
+    # firmware not running / still booting / too old / not a Meshtastic board.
+    return ("[meshtastic %s] opened the port but the radio did not answer the "
+            "handshake — confirm the radio is powered and running Meshtastic; "
+            "replug it; if you just flashed it, wait ~15s for boot. If the "
+            "firmware is very old, reflash current Meshtastic firmware (bundled "
+            "meshtastic-python is v%s)." % (port, lib))
 
 # ─────────────────────────────────────────────────────────────
 #  Normalized event shapes (protocol-agnostic)
@@ -340,7 +403,22 @@ class MeshtasticAdapter:
         info = self.iface.getMyNodeInfo() or {}
         user = info.get('user') or {}
         long_name = user.get('longName', '?')
-        logger.info("[meshtastic %s] connected to %s", self.port, long_name)
+        # Report the radio's firmware version + node identity on success so a
+        # tester can confirm what actually answered. Every field is guarded —
+        # the metadata attr / firmware_version may be absent on some firmware
+        # or library versions, and a missing field must never crash connect.
+        fw = '?'
+        try:
+            meta = getattr(self.iface, 'metadata', None)
+            if meta is not None:
+                fw = getattr(meta, 'firmware_version', None) or '?'
+        except Exception:
+            pass
+        node_id = info.get('user', {}).get('id') or (
+            "!%08x" % info.get('num', 0) if info.get('num') else '?')
+        logger.info(
+            "[meshtastic %s] connected to %s (%s) firmware %s",
+            self.port, long_name, node_id, fw)
         # Phase 39A: push the attached node's identity AND every node in the
         # nodedb the radio already knows about, so the admin console sees
         # friendly names immediately (not just !hex IDs).
@@ -950,34 +1028,85 @@ def dispatch_outbox(adapters: list, kind: str, target: str, payload: dict):
     return False, None, f"unknown kind {kind}"
 
 
-async def main_async(ports, protocols, sink, duration):
-    tasks = []
-    adapters = []
+# Internal retry/backoff bounds for the start-up loop. Tuned so the bridge
+# self-recovers from a rebooting radio or a momentarily busy port WITHOUT
+# churning through NSSM service restarts.
+_RETRY_INITIAL_DELAY = 5    # seconds before the first re-attempt
+_RETRY_MAX_DELAY     = 60   # cap the backoff here
 
+
+def _start_adapters(ports, protocols, sink, tasks):
+    """One attempt at bringing up every configured port.
+
+    Returns (adapters, last_reason). `last_reason` is a classified,
+    human-readable explanation of the most recent failure, used by the retry
+    loop to log WHY it is about to wait and try again.
+    """
+    adapters = []
+    last_reason = None
     for port, proto in zip(ports, protocols):
-        if proto == 'auto':
+        resolved = proto
+        if resolved == 'auto':
             logger.info("[%s] auto-detecting protocol", port)
-            proto = detect_protocol(port)
-            if not proto:
+            resolved = detect_protocol(port)
+            if not resolved:
+                last_reason = ("[%s] no protocol responded — radio may be "
+                               "unplugged, off, or still booting" % port)
                 logger.error("[%s] no protocol responded — skipping", port)
                 continue
-            logger.info("[%s] detected: %s", port, proto)
+            logger.info("[%s] detected: %s", port, resolved)
 
-        if proto == 'meshtastic':
+        if resolved == 'meshtastic':
             try:
                 ad = MeshtasticAdapter(port, sink)
                 ad.connect()
                 adapters.append(ad)
             except Exception as e:
-                logger.error("[meshtastic %s] connect failed: %s", port, e)
-        elif proto == 'meshcore':
+                last_reason = classify_meshtastic_connect_error(port, e)
+                logger.error("%s", last_reason)
+                logger.debug("[meshtastic %s] raw connect error: %r", port, e)
+        elif resolved == 'meshcore':
             ad = MeshCoreAdapter(port, sink)
             adapters.append(ad)
             tasks.append(asyncio.create_task(ad.run()))
+    return adapters, last_reason
 
-    if not adapters:
-        logger.error("no adapters started")
-        return 1
+
+async def main_async(ports, protocols, sink, duration):
+    logger.info("meshtastic-python library version %s", _meshtastic_lib_version())
+    tasks = []
+
+    # Bounded retry-with-backoff: keep re-attempting adapter start instead of
+    # exiting, so a rebooting radio or a momentarily busy port recovers in
+    # place rather than relying on the service manager to restart the process.
+    # Exits the loop the instant any adapter comes up.
+    adapters = []
+    delay = _RETRY_INITIAL_DELAY
+    attempt = 1
+    # For a finite --duration run, give up once the cumulative connect-retry
+    # time would exceed it, so a bounded run still terminates instead of
+    # looping past its own time budget. (A forever run — duration == 0 —
+    # retries indefinitely, which is what the service wants.)
+    start = time.monotonic()
+    while True:
+        adapters, reason = _start_adapters(ports, protocols, sink, tasks)
+        if adapters:
+            break
+        # Genuinely nothing came up. Wait and retry rather than dying.
+        logger.error(
+            "no adapters started (attempt %d) — %s",
+            attempt,
+            reason or "no port responded")
+        if duration > 0 and (time.monotonic() - start) + delay >= duration:
+            logger.error("no adapters within --duration %ds — giving up", duration)
+            return 1
+        logger.info("retrying in %ds (Ctrl+C / service stop to abort)", delay)
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        attempt += 1
+        delay = min(delay * 2, _RETRY_MAX_DELAY)
 
     # Outbox poll task (only when not dry-run, i.e. real CAD configured)
     if not sink.dry_run:

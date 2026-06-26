@@ -48,6 +48,18 @@ and does the server accept the token.
 
 To change the URL, token, or COM port later, re-run the installer.
 
+## Troubleshooting
+
+If the radio won't connect, the service won't start, or **Verify Bridge**
+reports a failure, see **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**. It's a
+plain-language guide covering: finding the radio's COM port, the
+one-program-per-port rule (and how to stop the bridge to flash firmware), driver
+issues (CP2102 vs CH340, and the clone-CP2102 caveat), firmware ↔ library
+compatibility, and how to read the bridge log
+(`C:\Program Files\TicketsCAD-MeshBridge\logs\bridge.log`). As of v0.1.4 the log
+prints a one-line, actionable reason for any connection failure, and the bridge
+retries automatically instead of exiting.
+
 ## Build it yourself
 
 You do not need to build the installer to use it — download it from Releases.
