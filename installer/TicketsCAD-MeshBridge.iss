@@ -260,8 +260,11 @@ begin
   Exec(ExpandConstant('{app}\nssm.exe'), 'stop {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{app}\nssm.exe'), 'remove {#MyServiceName} confirm', '', SW_HIDE, ewWaitUntilTerminated, Code);
 
-  { Build AppParameters. If a token was given, include url+token; else dry-run. }
-  Params := '"' + Bridge + '" --port ' + Port + ' --protocol meshtastic';
+  { Build AppParameters. Use the BARE script name (resolved via AppDirectory,
+    set below) rather than the full path -- NSSM drops the quotes when the app
+    args are passed inline with "install", so a full path containing a space
+    (e.g. C:\Program Files\...) gets split and Python sees only "C:\Program". }
+  Params := 'bridge_v2.py --port ' + Port + ' --protocol meshtastic';
   if (Url <> '') and (Token <> '') then
     Params := Params + ' --cad-url ' + Url + ' --cad-token ' + Token;
 

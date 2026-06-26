@@ -28,7 +28,9 @@ set SVC=TicketsCAD-MeshBridge
 "%NSSM%" stop %SVC% 2>nul
 "%NSSM%" remove %SVC% confirm 2>nul
 
-"%NSSM%" install %SVC% "%PY%" "%DIR%\bridge_v2.py" --port %PORT% --protocol meshtastic --cad-url %CAD_URL% --cad-token %CAD_TOKEN%
+REM Use the bare script name (resolved via AppDirectory below); NSSM drops the
+REM quotes around an inline "install" arg, so a full path with a space breaks it.
+"%NSSM%" install %SVC% "%PY%" bridge_v2.py --port %PORT% --protocol meshtastic --cad-url %CAD_URL% --cad-token %CAD_TOKEN%
 "%NSSM%" set %SVC% AppDirectory "%DIR%"
 "%NSSM%" set %SVC% DisplayName "TicketsCAD Meshtastic Mesh Bridge"
 "%NSSM%" set %SVC% Description "Bridges a Meshtastic radio to a TicketsCAD instance via api/mesh.php bearer token."
