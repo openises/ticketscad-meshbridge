@@ -1,0 +1,124 @@
+name: build-installer
+
+# Build the Windows Setup.exe and publish it as a GitHub Release on each
+# version tag. Can also be run on demand from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create the Release and upload the asset
+
+jobs:
+  build:
+    name: Build installer (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          # Strip a leading 'v' from tags like v0.1.0 -> 0.1.0
+          $v = $ref -replace '^v',''
+          if (-not ($v -match '^[0-9]+\.[0-9]+\.[0-9]+')) { $v = '0.0.0-dev' }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          echo "Building version: $v"
+
+      - name: Download Python 3.12.10 installer
+        shell: pwsh
+        run: |
+          $url = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'
+          Invoke-WebRequest -Uri $url -OutFile python-3.12.10-amd64.exe
+
+      - name: Silent-install Python into build\python312
+        shell: pwsh
+        run: |
+          $target = Join-Path $PWD 'build\python312'
+          New-Item -ItemType Directory -Force -Path 'build' | Out-Null
+          $p = Start-Process -FilePath '.\python-3.12.10-amd64.exe' -Wait -PassThru -ArgumentList @(
+            '/quiet',
+            "TargetDir=$target",
+            'InstallAllUsers=0',
+            'Include_launcher=0',
+            'Include_test=0',
+            'Include_doc=0',
+            'Include_tcltk=0',
+            'AssociateFiles=0',
+            'Shortcuts=0',
+            'PrependPath=0'
+          )
+          if ($p.ExitCode -ne 0) { throw "Python installer exited $($p.ExitCode)" }
+          if (-not (Test-Path "$target\python.exe")) { throw "python.exe not found at $target" }
+          & "$target\python.exe" --version
+
+      - name: Install pinned dependencies into the bundled Python
+        shell: pwsh
+        run: |
+          $py = Join-Path $PWD 'build\python312\python.exe'
+          & $py -m pip install --upgrade pip
+          & $py -m pip install -r installer\requirements-frozen.txt
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
+
+      - name: Assemble installer payload
+        shell: pwsh
+        run: |
+          $payload = Join-Path $PWD 'installer\payload'
+          if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          Copy-Item -Recurse -Force 'build\python312' (Join-Path $payload 'python312')
+          Copy-Item -Force 'bridge_v2.py' $payload
+          Copy-Item -Force 'nssm.exe'     $payload
+          Write-Host "Payload contents:"
+          Get-ChildItem $payload | Select-Object Name
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed ($LASTEXITCODE)" }
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" 'installer\TicketsCAD-MeshBridge.iss'
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          $exe = 'installer\output\TicketsCAD-MeshBridge-Setup.exe'
+          if (-not (Test-Path $exe)) { throw "Setup.exe was not produced at $exe" }
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "Built $exe ($size MB)"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TicketsCAD-MeshBridge-Setup
+          path: installer/output/TicketsCAD-MeshBridge-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TicketsCAD Mesh Bridge ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: installer/output/TicketsCAD-MeshBridge-Setup.exe
+          body: |
+            TicketsCAD Meshtastic / MeshCore mesh bridge — Windows installer.
+
+            Download `TicketsCAD-MeshBridge-Setup.exe` below and run it. The
+            wizard asks for your Server URL, Bearer Token, and the radio's COM
+            port, then installs an autostarting Windows service and (optionally)
+            the Silicon Labs CP210x USB driver. Use the "Verify Bridge" shortcut
+            afterward to confirm it is healthy.
+
+            Bundled: self-contained Python 3.12.10 with pinned dependencies,
+            the bridge, the NSSM service wrapper, and the CP210x driver.

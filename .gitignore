@@ -1,0 +1,19 @@
+# CI-generated bundle + build artifacts (never committed; built by the workflow)
+python312/
+installer/payload/
+output/
+installer/output/
+build/
+*-Setup.exe
+
+# Local Python / virtualenv
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS cruft
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
